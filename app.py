@@ -37,7 +37,7 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         deny_platforms = self.get_setting("deny_platforms")
 
         p = {
-            "title": "(Testing) Copy Playlist Files to Folder",
+            "title": "Copy Playlist Files to Folder",
 
             "deny_permissions": deny_permissions,
             "deny_platforms": deny_platforms,
@@ -48,7 +48,7 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
             "copyPlaylistVersionsToFolder", self.copyPlaylistVersionsToFolder, p)
 
         p = {
-            "title": "(Testing) Preview Copy Playlist Files to Folder",
+            "title": "Copy Playlist Files to Folder (Preview)",
 
             "deny_permissions": deny_permissions,
             "deny_platforms": deny_platforms,
@@ -76,6 +76,7 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
             playlist = self.get_playlist(entity_type, entity_ids)
             versions = self.get_playlist_versions(playlist)
             published_files = self.get_published_files(versions)
+            published_files.extend(self.get_playlist_published_files(playlist))
             self.copy_files_to_playlist_location(playlist, published_files, preview)
             self.log_info("")
             if not preview:
@@ -112,6 +113,16 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
             raise Exception("Playlist has no recipient")
         return result
 
+    def get_playlist_published_files(self, playlist):
+        filters = [
+            ['playlist_sg_published_files_playlists', 'is', {'type': 'Playlist', 'id': playlist['id']}]]
+        fields = ['path',
+                  'sg_publish_path',
+                  'code']
+        published_files = self.tank.shotgun.find(
+            'PublishedFile', filters, fields)
+        return published_files
+
     def get_playlist_versions(self, playlist):
         filters = [
             ['playlist', 'is', {'type': 'Playlist', 'id': playlist['id']}]]
@@ -137,7 +148,7 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         return published_files
 
     def copy_files_to_playlist_location(self, playlist, published_files, preview):
-        output_folder = self.get_ouput_folder(playlist)
+        output_folder = self.get_output_folder(playlist)
         filepaths = self.get_filepath_list(published_files)
         self.log_info("For playlist %s :" % playlist['code'])
         self.log_info("")
@@ -150,7 +161,7 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         for path in filepaths:
             self.copy_file(path, output_folder, preview)
 
-    def get_ouput_folder(self, playlist):
+    def get_output_folder(self, playlist):
         projectPath = self.tank.project_path
         dailiesDir = os.path.join(projectPath, 'client_io', 'out')
 

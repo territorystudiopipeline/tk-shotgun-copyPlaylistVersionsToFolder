@@ -13,50 +13,57 @@ App that copies all of the versions in the chosen playlist to a dated folder in 
 """
 
 import tank
-import sys
 import os
-import subprocess
 import re
 import glob
 import traceback
 import datetime
+import filecmp
 from shutil import copy
 
 
-class CopyPlaylistVersionsToFolder(tank.platform.Application):
+PREVIEW = 1
+LIGHT = 2
+HEAVY = 3
 
-    all_files = set()
-    copied = set()
-    not_copied = set()
-    missing = set()
-    already_existing = set()
+
+class CopyPlaylistVersionsToFolder(tank.platform.Application):
+    all_files = []
+    copied = []
+    not_copied = []
+    missing = []
+    already_existing = []
 
     def init_app(self):
-        entity_types = self.get_setting("entity_types")
         deny_permissions = self.get_setting("deny_permissions")
         deny_platforms = self.get_setting("deny_platforms")
 
-        p = {
-            "title": "Copy Playlist Files to Folder",
+        p = {"title": "Copy Playlist Files to Folder (Exc. Image Sequences)",
+             "deny_permissions": deny_permissions,
+             "deny_platforms": deny_platforms,
+             "supports_multiple_selection": False}
 
-            "deny_permissions": deny_permissions,
-            "deny_platforms": deny_platforms,
-            "supports_multiple_selection": False
-        }
+        self.engine.register_command("copyPlaylistVersionsToFolder_light",
+                                     self.copyPlaylistVersionsToFolder_light,
+                                     p)
 
-        self.engine.register_command(
-            "copyPlaylistVersionsToFolder", self.copyPlaylistVersionsToFolder, p)
+        p = {"title": "Copy Playlist Files to Folder (Inc. Image Sequences)",
+             "deny_permissions": deny_permissions,
+             "deny_platforms": deny_platforms,
+             "supports_multiple_selection": False}
 
-        p = {
-            "title": "Copy Playlist Files to Folder (Preview)",
+        self.engine.register_command("copyPlaylistVersionsToFolder_heavy",
+                                     self.copyPlaylistVersionsToFolder_heavy,
+                                     p)
 
-            "deny_permissions": deny_permissions,
-            "deny_platforms": deny_platforms,
-            "supports_multiple_selection": False
-        }
+        p = {"title": "Copy Playlist Files to Folder (Preview Mode)",
+             "deny_permissions": deny_permissions,
+             "deny_platforms": deny_platforms,
+             "supports_multiple_selection": False}
 
-        self.engine.register_command(
-            "copyPlaylistVersionsToFolder_preview", self.copyPlaylistVersionsToFolder_preview, p)
+        self.engine.register_command("copyPlaylistVersionsToFolder_preview",
+                                     self.copyPlaylistVersionsToFolder_preview,
+                                     p)
 
     def returnVersionNumberIntFromStringOrNone(self, fileString):
         regex = "_[vV]\d+"
@@ -67,29 +74,40 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         intVersion = int(versionStringMatch[2:])
         return intVersion
 
-    def copyPlaylistVersionsToFolder_preview(self, entity_type, entity_ids):
-        self.copyPlaylistVersionsToFolder(
-            entity_type, entity_ids, preview=True)
+    def copyPlaylistVersionsToFolder_light(self, entity_type, entity_ids):
+        self.copyPlaylistVersionsToFolder(entity_type,
+                                          entity_ids, mode=LIGHT)
 
-    def copyPlaylistVersionsToFolder(self, entity_type, entity_ids, preview=False):
+    def copyPlaylistVersionsToFolder_heavy(self, entity_type, entity_ids):
+        self.copyPlaylistVersionsToFolder(entity_type,
+                                          entity_ids, mode=HEAVY)
+
+    def copyPlaylistVersionsToFolder_preview(self, entity_type, entity_ids):
+        self.copyPlaylistVersionsToFolder(entity_type,
+                                          entity_ids, mode=PREVIEW)
+
+    def copyPlaylistVersionsToFolder(self, entity_type, entity_ids, mode=PREVIEW):
         try:
+            if mode == PREVIEW:
+                self.log_info('==================== PREVIEW MODE no files copied. ====================')
+                self.log_info('')
             playlist = self.get_playlist(entity_type, entity_ids)
             versions = self.get_playlist_versions(playlist)
             published_files = self.get_published_files(versions)
             published_files.extend(self.get_playlist_published_files(playlist))
-            self.copy_files_to_playlist_location(playlist, published_files, preview)
+            self.copy_files_to_playlist_location(playlist, published_files, mode)
             self.log_info("")
-            if not preview:
+            if mode != PREVIEW:
                 self.update_version_info(playlist, versions)
             self.log_info("")
             self.log_info("Finished")
-            self.log_info("Total files found: %d" % len(self.all_files))
-            self.log_info("Files missing: %d" % len(self.missing))
-            self.log_info("Files copied: %d" % len(self.copied))
-            self.log_info("Files already existing: %d" % len(self.already_existing))
-            if preview:
-                self.log_info("PREVIEW MODE, no files copied.")
-
+            # self.log_info("Total files found: %d" % len(self.all_files))
+            self.log_info("Errors: %d" % len(self.missing))
+            self.log_info("Successes: %d" % len(self.copied))
+            # self.log_info("Already existing: %d" % len(self.already_existing))
+            if mode == PREVIEW:
+                self.log_info('')
+                self.log_info('==================== PREVIEW MODE no files copied. ====================')
         except Exception, e:
             self.log_exception(traceback.format_exc())
             self.log_exception(str(e))
@@ -142,12 +160,20 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         for version in versions:
             published_files += self.tank.shotgun.find("PublishedFile",
                                                       [['version.Version.id', 'is', version['id']]],
-                                                      ['path',
-                                                       'sg_publish_path',
+                                                      ['sg_publish_path',
+                                                       'downstream_published_files',
                                                        'code'])
-        return published_files
+        downstream_published_files = [] 
+        for published_file in published_files:
+            if published_file.get('downstream_published_files'):
+                for downstream_published_file in published_file['downstream_published_files']:
+                    downstream_published_files += self.tank.shotgun.find("PublishedFile",
+                                                                          [['id', 'is', downstream_published_file['id']]],
+                                                                          ['sg_publish_path',
+                                                                           'code'])
+        return published_files + downstream_published_files
 
-    def copy_files_to_playlist_location(self, playlist, published_files, preview):
+    def copy_files_to_playlist_location(self, playlist, published_files, mode=PREVIEW):
         output_folder = self.get_output_folder(playlist)
         filepaths = self.get_filepath_list(published_files)
         self.log_info("For playlist %s :" % playlist['code'])
@@ -155,11 +181,13 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         self.log_info("Copying the following files into %s:" % output_folder)
         self.log_info("")
         for path in filepaths:
-            self.log_info(os.path.basename(path))
-
-        self.log_info("")
-        for path in filepaths:
-            self.copy_file(path, output_folder, preview)
+            try:
+                if self.copy_file(path, output_folder, mode):
+                    self.log_info("Success: %s" % os.path.basename(path))
+                    self.copied.append(file)
+            except Exception as e:
+                self.log_info("Error: %s" % os.path.basename(path))
+                self.missing.append(file)
 
     def get_output_folder(self, playlist):
         projectPath = self.tank.project_path
@@ -175,12 +203,15 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
                 p = self.get_localised_path(published_file['sg_publish_path'])
                 if p:
                     paths.append(p)
+            else:
+                self.log_info("Cannot find publish path for %s" % published_file['code'])
+                # exit()
                 # paths.append(published_file['sg_publish_path']['local_path'])
-            elif published_file.get('path'):
-                p = self.get_localised_path(published_file['path'])
-                if p:
-                    paths.append(p)
-                # paths.append(published_file['path']['local_path'])
+            # elif published_file.get('path'):
+            #     p = self.get_localised_path(published_file['path'])
+            #     if p:
+            #         paths.append(p)
+            #     # paths.append(published_file['path']['local_path'])
         return paths
 
     def get_localised_path(self, path_obj):
@@ -210,29 +241,34 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
                 nuPath = nuPath.replace("\\\\192.168.50.10\\Filmshare\\", "Y:\\")
             return nuPath
 
-    def copy_file(self, source, dest_folder, preview):
+    def copy_file(self, source, dest_folder, mode=PREVIEW):
         files = [source]
-        if self.is_sequence(source):
+        is_seq = self.is_sequence(source)
+        if is_seq:
+            if mode == LIGHT:
+                return False
             files = self.get_sequence_files(source)
             if len(files) == 0:
                 self.log_exception("MISSING FILE: " + str(file))
-                self.missing.add(file)
+                self.missing.append(file)
             dest_folder = os.path.join(dest_folder, self.get_sequence_sub_folder(source))
-        if not os.path.exists(dest_folder):
+        if not os.path.exists(dest_folder) and mode != PREVIEW:
             os.makedirs(dest_folder)
+        if len(files) == 0:
+            return False
         for file in files:
-            self.all_files.add(file)
+            self.all_files.append(file)
             nu_path = os.path.join(dest_folder, os.path.basename(file))
-            if os.path.exists(nu_path):
-                self.already_existing.add(file)
+            if os.path.exists(nu_path) and filecmp.cmp(file, nu_path, True):
+                self.already_existing.append(file)
             else:
-                if not preview:
+                if mode != PREVIEW:
                     if os.path.exists(file):
                         copy(file, nu_path)
-                        self.copied.add(file)
                     else:
                         self.log_exception("MISSING FILE: " + str(file))
-                        self.missing.add(file)
+                        return False
+        return True
 
     def is_sequence(self, path):
         pattern = re.compile(".*%\d+d\..*")

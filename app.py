@@ -159,7 +159,8 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
         published_files = []
         for version in versions:
             published_files += self.tank.shotgun.find("PublishedFile",
-                                                      [['version.Version.id', 'is', version['id']]],
+                                                      [['version.Version.id', 'is', version['id']],
+                                                       ['sg_internal_only', 'is_not', True]],
                                                       ['sg_publish_path',
                                                        'downstream_published_files',
                                                        'code'])
@@ -168,7 +169,8 @@ class CopyPlaylistVersionsToFolder(tank.platform.Application):
             if published_file.get('downstream_published_files'):
                 for downstream_published_file in published_file['downstream_published_files']:
                     downstream_published_files += self.tank.shotgun.find("PublishedFile",
-                                                                          [['id', 'is', downstream_published_file['id']]],
+                                                                          [['id', 'is', downstream_published_file['id']],
+                                                                           ['sg_internal_only', 'is_not', True]],
                                                                           ['sg_publish_path',
                                                                            'code'])
         return published_files + downstream_published_files
